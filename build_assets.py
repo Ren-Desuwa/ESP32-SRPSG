@@ -11,19 +11,11 @@ except ImportError:
     IS_PIO_BUILD = False
 
 # --- CONFIGURATION ---
-
-# 1. Get the absolute path of THIS script file
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# 2. Resolve the source dir relative to the script
-# This moves Up 2 levels from the script's location, then into Websites/braniac
-SOURCE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '../../Websites/brainiac'))
-
-DATA_DIR = os.path.join(SCRIPT_DIR, 'data')
-BACKUP_DIR = os.path.join(SCRIPT_DIR, 'backups')
-HASH_FILE = os.path.join(SCRIPT_DIR, '.last_build_hash')
-MSG_FILE = os.path.join(SCRIPT_DIR, 'commit_message.txt')
-
+SOURCE_DIR = '../../Websites/brainiac'
+DATA_DIR = 'data'
+BACKUP_DIR = 'backups'
+HASH_FILE = '.last_build_hash'
+MSG_FILE = 'commit_message.txt'
 GZIP_EXTENSIONS = {'.html', '.css', '.js', '.json', '.xml', '.svg', '.txt'}
 # ---------------------
 # ... imports ...

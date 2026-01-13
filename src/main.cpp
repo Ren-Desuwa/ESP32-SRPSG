@@ -4,10 +4,8 @@
 #include <DNSServer.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <LittleFS.h>
 #include "Gyro.h"
-#include "index.h"
-#include "style.h"
-#include "script.h"
 
 #define ssid "ball"
 #define Button 19
@@ -33,27 +31,21 @@ String getGyroJson() {
   return json;
 }
 
-void sendIndex(AsyncWebServerRequest *request) {
-  request->send(200, "text/html", webpageIndex);
-}
-
-void sendStyle(AsyncWebServerRequest *request) {
-  request->send(200, "text/css", webpageStyle);
-}
-
-void sendScript(AsyncWebServerRequest *request) {
-  request->send(200, "application/javascript", webpageScript);
-}
-
 void setup() {
   Serial.begin(115200);
   pinMode(Button, INPUT_PULLUP);
   gyro.setup();
 
+  // 1. Initialize File System
+  if(!LittleFS.begin()){
+    Serial.println("An Error has occurred while mounting LittleFS");
+    return;
+  }
+
   WiFi.mode(WIFI_AP);
   WiFi.softAP("Ball_Test_AP");
   WiFi.setSleep(false);
-  
+
   // DNS Server for Captive Portal
   dnsServer.start(53, "*", WiFi.softAPIP());
   
@@ -64,9 +56,12 @@ void setup() {
     MDNS.addService("http", "tcp", 80);
   }
 
-  WebServer.on("/", HTTP_GET, sendIndex);
-  WebServer.on("/style.css", HTTP_GET, sendStyle);
-  WebServer.on("/script.js", HTTP_GET, sendScript);
+  WebServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+
+  WebServer.on("/handshake", HTTP_POST, [](AsyncWebServerRequest *request){
+    // Simple response to say "I'm here"
+    request->send(200, "application/json", "{\"status\":\"ok\"}");
+  });
 
   // Captive Portal Redirect
   WebServer.onNotFound([](AsyncWebServerRequest *request){
@@ -76,6 +71,8 @@ void setup() {
   WebServer.addHandler(&WebSocket);
   WebServer.begin();
   Serial.println("HTTP server started");
+  Serial.print("AP IP address: ");
+  Serial.println(WiFi.softAPIP());
 }
 
 void loop() {
