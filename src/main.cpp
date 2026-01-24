@@ -7,7 +7,7 @@
 #include <LittleFS.h>
 #include "Gyro.h"
 
-#define ssid "b
+#define ssid "ball"
 #define Button 19
 
 Gyro gyro(21, 22); // SDA, SCL pins
@@ -43,7 +43,7 @@ void setup() {
   }
 
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("Ball_Test_AP");
+  WiFi.softAP("Ball_Test_AP_main");
   WiFi.setSleep(false);
 
   // DNS Server for Captive Portal
