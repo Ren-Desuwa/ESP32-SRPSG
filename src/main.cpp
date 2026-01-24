@@ -7,7 +7,7 @@
 #include <LittleFS.h>
 #include "Gyro.h"
 
-#define ssid "ball"
+#define ssid "b
 #define Button 19
 
 Gyro gyro(21, 22); // SDA, SCL pins
