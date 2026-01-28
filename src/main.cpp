@@ -24,6 +24,7 @@
 #define RGB_PIN 48
 #define GYRO_SDA 8
 #define GYRO_SCL 9
+#define Button 21
 
 // --- GLOBALS ---
 Gyro gyro(GYRO_SDA, GYRO_SCL); 
@@ -32,6 +33,8 @@ AsyncWebSocket ws("/ws");
 DNSServer dns;
 
 // Managers
+DBManager DB;
+SessionManager Session;
 NetworkManager net(&server, &dns, &ws);
 
 // State tracking (Preserved from V2.6.0)
@@ -85,6 +88,7 @@ void setup() {
 
     // 1. Hardware Init
     pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(Button, INPUT_PULLUP);
     neoPin(RGB_PIN);
     setNormalShuffle(); // Initial Sequence Load
 
@@ -118,7 +122,7 @@ void loop() {
         // [RULE 2 LOG] Manual Police Siren Toggle
         static unsigned long lastBlink = 0;
         static bool flip = false;
-        if (millis() - lastBlink > 100) { // Fast blink
+        if (millis() - lastBlink > 100) { 
             lastBlink = millis();
             flip = !flip;
             if(flip) neoColor(50, 0, 0); // RED
@@ -130,17 +134,25 @@ void loop() {
     gyro.getData();
     gyro.readAll();
 
-    // 4. Telemetry Broadcast
-    // Limit to ~30Hz (every 33ms) to save bandwidth
-    static unsigned long lastTele = 0;
-    if (millis() - lastTele > 30) {
-        lastTele = millis();
-        
-        // [FIX] Use .size() instead of .length() for std::list
-        auto& clients = ws.getClients();
-        if (clients.size() > 0) { 
-            String json = "{\"x\":" + String(gyro.readX(), 1) + ",\"z\":" + String(gyro.readZ(), 1) + "}";
-            ws.textAll(json);
+    // 4. Telemetry Broadcast (Senior Dev Implementation)
+    ws.cleanupClients(); 
+    auto& clients = ws.getClients();
+    
+    for (auto& client : clients) {
+        // [CRITICAL] Backpressure Check
+        if (client.status() == WS_CONNECTED && client.canSend()) {
+            
+            // FIX: Added logic to read Pin 21 (Button)
+            // LOW = Pressed (1), HIGH = Released (0)
+            String json = "{\"x\":" + String(gyro.readAccumX(), 2) + 
+                          ",\"y\":" + String(gyro.readAccumY(), 2) + 
+                          ",\"z\":" + String(gyro.readAccumZ(), 2) +
+                          ",\"b1\":" + String(digitalRead(Button) == LOW ? 1 : 0) + "}";
+            
+            client.text(json);
         }
     }
+
+    // 5. Mandatory Yield
+    delay(2);
 }

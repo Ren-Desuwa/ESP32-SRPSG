@@ -89,6 +89,6 @@ public:
 };
 
 extern DBManager DB;
-DBManager DB;
+
 
 #endif

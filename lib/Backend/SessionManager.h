@@ -44,6 +44,6 @@ public:
 };
 
 extern SessionManager Session;
-SessionManager Session;
+
 
 #endif
