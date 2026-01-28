@@ -1,34 +1,40 @@
 /**
  * Project: Brainiac Ball Controller - Professional Build
- * Version: 2.6.0 (Senior Developer No-Emoji Edition)
+ * Version: 3.0.0 (Senior Developer Database Edition)
  * -------------------------------------------------------
  * [LOGGING POLICY] Rule 2: No deleting logs or comments. 
  * Every hardware event and software state transition is logged.
  */
 
 #include <Arduino.h>
-#include <ESPAsyncWebServer.h>
-#include <ESPmDNS.h>
-#include <DNSServer.h>
-#include <ArduinoJson.h>
 #include <WiFi.h>
-#include "Neo.h"
-#include <SD_MMC.h> 
-#include <FS.h>
-#include "Gyro.h"
+#include <ESPAsyncWebServer.h>
+#include <DNSServer.h>
+#include "Neo.h"       // [SOURCE: uploaded include/NeoLED]
+#include "Gyro.h"        // [SOURCE: uploaded include/Gyro]
 
-// --- Hardware & Network Configuration ---
-#define ssid "Ball_Test_AP"
-#define Button 0 
+// --- MODULAR BACKEND ---
+#include "DBManager.h"       // [SOURCE: uploaded include/Backend]
+#include "SessionManager.h"  // [SOURCE: uploaded include/Backend]
+#include "NetworkManager.h"  // [SOURCE: uploaded include/Backend]
+
+// --- HARDWARE CONFIG ---
+#define SSID_NAME "Ball_Test_AP"
+#define BUTTON_PIN 0 
 #define RGB_PIN 48
+#define GYRO_SDA 8
+#define GYRO_SCL 9
 
-// Globals
-Gyro gyro(8, 9); 
-AsyncWebServer WebServer(80);
-AsyncWebSocket WebSocket("/ws");
-DNSServer dnsServer;
+// --- GLOBALS ---
+Gyro gyro(GYRO_SDA, GYRO_SCL); 
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+DNSServer dns;
 
-// State tracking for LEDs to prevent logic collisions
+// Managers
+NetworkManager net(&server, &dns, &ws);
+
+// State tracking (Preserved from V2.6.0)
 bool isUploading = false; 
 
 /**
@@ -56,68 +62,29 @@ void setNormalShuffle() {
  * [RULE 2 LOG] Wiping buffer to allow manual high-speed Red/Blue toggle.
  */
 void setPoliceSiren() {
-    Serial.println("[LED-STATE] Upload detected. Invoking neoClearAll() for Police Siren.");
+    Serial.println("[LED-STATE] Upload/Write detected. Invoking neoClearAll() for Police Siren.");
     neoClearAll(); 
 }
 
-/**
- * Handler: handleUpload
- * Description: Receives chunks from Python. Alternates Red/Blue LEDs.
- * Automatically recreates directory paths on the SD card.
- */
-void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-    static bool flip = false;
-    
-    // Retrieve custom path from Python headers
-    if(request->hasHeader("X-File-Path")) {
-        filename = request->getHeader("X-File-Path")->value();
-    }
-
-    if (!index) {
-        // --- START OF FILE UPLOAD ---
-        Serial.printf("[UPLOAD-EVENT] Transaction started for: %s\n", filename.c_str());
-        isUploading = true; 
-        setPoliceSiren(); 
-        
-        if(!filename.startsWith("/")) filename = "/" + filename;
-        
-        int lastSlash = filename.lastIndexOf('/');
-        if (lastSlash > 0) {
-            String path = filename.substring(0, lastSlash);
-            if (!SD_MMC.exists(path)) {
-                Serial.printf("[FS-LOG] Creating path: %s\n", path.c_str());
-                SD_MMC.mkdir(path);
-            }
-        }
-        
-        Serial.printf("[FS-LOG] Writing: %s\n", filename.c_str());
-        request->_tempFile = SD_MMC.open(filename, FILE_WRITE);
-    }
-    
-    if (request->_tempFile) {
-        request->_tempFile.write(data, len);
-        
-        // --- POLICE SIREN TOGGLE ---
-        flip = !flip;
-        if(flip) neoColor(50, 0, 0); // RED
-        else neoColor(0, 0, 50);     // BLUE
-    }
-    
-    if (final) {
-        // --- END OF FILE UPLOAD ---
-        Serial.printf("[UPLOAD-EVENT] Finalized: %s\n", filename.c_str());
-        request->_tempFile.close();
-        isUploading = false; 
-        setNormalShuffle(); 
+// --- CALLBACK HANDLERS ---
+// This allows NetworkManager to notify Main about activity without knowing about LEDs
+void onSystemBusy(bool busy) {
+    isUploading = busy;
+    if (isUploading) {
+        setPoliceSiren();
+    } else {
+        Serial.println("[UPLOAD-EVENT] Transaction Finished.");
+        setNormalShuffle();
     }
 }
 
 void setup() {
     Serial.begin(115200);
     delay(2000); 
-    Serial.println("\n[BOOT-LOG] Brainiac Ball Controller Online.");
+    Serial.println("\n[BOOT-LOG] Brainiac Ball Controller V3.0 (DB Edition) Online.");
 
-    pinMode(Button, INPUT_PULLUP);
+    // 1. Hardware Init
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
     neoPin(RGB_PIN);
     setNormalShuffle(); // Initial Sequence Load
 
@@ -125,59 +92,55 @@ void setup() {
     gyro.setup();
     Serial.println(" SUCCESS");
 
-    int clk = 39, cmd = 38, d0 = 40;
-    SD_MMC.setPins(clk, cmd, d0);
-    Serial.print("[HARDWARE-LOG] SD_MMC Mount...");
-    if(!SD_MMC.begin("/sdcard", true)) {
-        Serial.println(" FAILED!");
-    } else {
-        Serial.println(" SUCCESS");
-    }
+    // 2. Database Init (SD Card)
+    // [RULE 2 LOG] Handled inside DBManager::init(), but we confirm here.
+    DB.init(); 
 
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ssid);
-    dnsServer.start(53, "*", WiFi.softAPIP());
-    MDNS.begin("ball");
+    // 3. Network Init
+    net.init(SSID_NAME);
+    
+    // 4. Route Setup (With Busy Callback for LEDs)
+    // We pass the 'onSystemBusy' function so the LED changes when the DB is written
+    net.setupRoutes(onSystemBusy);
 
-    WebServer.serveStatic("/", SD_MMC, "/").setDefaultFile("login.html");
-
-    WebServer.on("/upload", HTTP_DELETE, [](AsyncWebServerRequest *request) {
-        if(request->hasHeader("X-File-Path")) {
-            String path = request->getHeader("X-File-Path")->value();
-            if(!path.startsWith("/")) path = "/" + path;
-            if (SD_MMC.exists(path)) {
-                SD_MMC.remove(path);
-                Serial.printf("[PRUNE-LOG] Deleted: %s\n", path.c_str());
-                request->send(200, "text/plain", "Deleted");
-            }
-        }
-    });
-
-    WebServer.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request) { request->send(200); }, handleUpload);
-    WebServer.onNotFound([](AsyncWebServerRequest *request){ request->redirect("http://" + WiFi.softAPIP().toString() + "/"); });
-
-    WebServer.addHandler(&WebSocket);
-    WebServer.begin();
     Serial.println("[SYSTEM-LOG] Deployment and Telemetry services ready.");
 }
 
 void loop() {
-    dnsServer.processNextRequest();
-    WebSocket.cleanupClients();
+    // 1. Network Housekeeping
+    dns.processNextRequest();
+    ws.cleanupClients();
 
+    // 2. LED Logic (Preserved V2.6.0 Siren Logic)
     if (!isUploading) {
         neoAuto(1000); 
+    } else {
+        // [RULE 2 LOG] Manual Police Siren Toggle
+        static unsigned long lastBlink = 0;
+        static bool flip = false;
+        if (millis() - lastBlink > 100) { // Fast blink
+            lastBlink = millis();
+            flip = !flip;
+            if(flip) neoColor(50, 0, 0); // RED
+            else neoColor(0, 0, 50);     // BLUE
+        }
     }
 
+    // 3. Sensor Loop
     gyro.getData();
     gyro.readAll();
 
-    auto& clients = WebSocket.getClients();
-    for (auto& client : clients) {
-        if (client.status() == WS_CONNECTED && client.canSend()) {
+    // 4. Telemetry Broadcast
+    // Limit to ~30Hz (every 33ms) to save bandwidth
+    static unsigned long lastTele = 0;
+    if (millis() - lastTele > 30) {
+        lastTele = millis();
+        
+        // [FIX] Use .size() instead of .length() for std::list
+        auto& clients = ws.getClients();
+        if (clients.size() > 0) { 
             String json = "{\"x\":" + String(gyro.readX(), 1) + ",\"z\":" + String(gyro.readZ(), 1) + "}";
-            client.text(json);
+            ws.textAll(json);
         }
     }
-    delay(5); 
 }
