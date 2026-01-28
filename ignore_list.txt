@@ -1,0 +1,16 @@
+# Source Control
+.git/
+.gitignore
+
+# OS Junk
+.DS_Store
+Thumbs.db
+
+# Build Artifacts
+.last_build_hash
+backups/
+data/
+
+# Specific large/unused assets
+*.mp4
+*.zip

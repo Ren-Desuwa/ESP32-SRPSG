@@ -11,7 +11,7 @@ except ImportError:
     IS_PIO_BUILD = False
 
 # --- CONFIGURATION ---
-SOURCE_DIR = '../../Websites/brainiac'
+SOURCE_DIR = '../../Websites/Braniac 2'
 DATA_DIR = 'data'
 BACKUP_DIR = 'backups'
 HASH_FILE = '.last_build_hash'
