@@ -31,13 +31,32 @@ void Gyro::setup(uint8_t I2C_SDA, uint8_t I2C_SCL) {
 
 void Gyro::getData() {
     if (!dmpReady) return;
+    
+    // Get standard raw values
     getMotion6(&RawAccelX, &RawAccelY, &RawAccelZ, &RawGyroX, &RawGyroY, &RawGyroZ);
 
+    // Get Advanced DMP Packets
     if (dmpGetCurrentFIFOPacket(fifoBuffer)) {
         dmpGetQuaternion(&q, fifoBuffer);
+        dmpGetAccel(&aa, fifoBuffer);
         dmpGetGravity(&gravity, &q);
+        dmpGetLinearAccel(&aaReal, &aa, &gravity); // Removes Gravity from Accel
         dmpGetYawPitchRoll(angle, &q, &gravity);
     }
+}
+
+// [NEW] Get Linear Acceleration (Movement only, no gravity)
+void Gyro::getLinearAccel(int16_t &x, int16_t &y, int16_t &z) {
+    x = aaReal.x;
+    y = aaReal.y;
+    z = aaReal.z;
+}
+
+// [NEW] Get Gravity Vector (Orientation only, no movement)
+void Gyro::getGravity(float &x, float &y, float &z) {
+    x = gravity.x;
+    y = gravity.y;
+    z = gravity.z;
 }
 
 void Gyro::readAll() {
@@ -57,15 +76,25 @@ void Gyro::readAll() {
     AngleZ = wrapAngle(AngleZ);
     
     // Update accumulated angles
+    // Update accumulated angles
     if (firstReading) {
         AccumAngleX = AngleX;
         AccumAngleY = AngleY;
         AccumAngleZ = AngleZ;
         firstReading = false;
     } else {
-        AccumAngleX += angleDifference(AngleX, lastAngle[0]);
-        AccumAngleY += angleDifference(AngleY, lastAngle[1]);
-        AccumAngleZ += angleDifference(AngleZ, lastAngle[2]);
+        // --- START OF FIX ---
+        // Calculate the difference first
+        float diffX = angleDifference(AngleX, lastAngle[0]);
+        float diffY = angleDifference(AngleY, lastAngle[1]);
+        float diffZ = angleDifference(AngleZ, lastAngle[2]);
+
+        // IGNORE jumps larger than 50 degrees (Gimbal Lock Glitch)
+        // No human hand rotates 50 degrees in 16ms
+        if (abs(diffX) < 50.0) AccumAngleX += diffX;
+        if (abs(diffY) < 50.0) AccumAngleY += diffY;
+        if (abs(diffZ) < 50.0) AccumAngleZ += diffZ;
+        // --- END OF FIX ---
     }
     
     // Store current angles for next iteration

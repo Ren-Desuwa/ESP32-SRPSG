@@ -1,140 +1,189 @@
 /**
- * Project: Brainiac Ball Controller - Professional Build
- * Version: 2.6.0 (Senior Developer No-Emoji Edition)
- * -------------------------------------------------------
- * [LOGGING POLICY] Rule 2: No deleting logs or comments. 
- * Every hardware event and software state transition is logged.
+ * Project: Brainiac Ball Controller - Hub Unit (WROOM-32 Edition)
+ * Role: CENTRAL SERVER & BRIDGE
  */
 
 #include <Arduino.h>
-#include <ESPAsyncWebServer.h>
-#include <ESPmDNS.h>
-#include <DNSServer.h>
-// #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <DNSServer.h>
 #include <SD.h> 
 #include <SPI.h>
+#include "EspNowHub.h"      
 #include "Gyro.h"
 
-// --- Hardware & Network Configuration ---
-#define ssid "Ball_Test_AP"
-#define Button 0 
-#define RGB_PIN 48
+// --- MODULAR BACKEND ---
+#include "DBManager.h"       
+#include "SessionManager.h"  
+#include "NetworkManager.h"  
 
-// Globals
-Gyro gyro(8, 9); 
-AsyncWebServer WebServer(80);
-AsyncWebSocket WebSocket("/ws");
-DNSServer dnsServer;
-
-// State tracking for LEDs to prevent logic collisions
-bool isUploading = false; 
-
-/**
- * Handler: handleUpload
- * Description: Receives chunks from Python. Alternates Red/Blue LEDs.
- * Automatically recreates directory paths on the SD card.
- */
-void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-    static bool flip = false;
+// --- SHARED PROTOCOL ---
+struct MotionData {
+    float x;      // 4 bytes (Gyro Angle)
+    float y;      // 4 bytes
+    float z;      // 4 bytes
     
-    // Retrieve custom path from Python headers
-    if(request->hasHeader("X-File-Path")) {
-        filename = request->getHeader("X-File-Path")->value();
-    }
-
-    if (!index) {
-        // --- START OF FILE UPLOAD ---
-        Serial.printf("[UPLOAD-EVENT] Transaction started for: %s\n", filename.c_str());
-        isUploading = true; 
-        
-        if(!filename.startsWith("/")) filename = "/" + filename;
-        
-        int lastSlash = filename.lastIndexOf('/');
-        if (lastSlash > 0) {
-            String path = filename.substring(0, lastSlash);
-            if (!SD.exists(path)) {
-                Serial.printf("[FS-LOG] Creating path: %s\n", path.c_str());
-                SD.mkdir(path);
-            }
-        }
-        
-        Serial.printf("[FS-LOG] Writing: %s\n", filename.c_str());
-        request->_tempFile = SD.open(filename, FILE_WRITE);
-    }
+    int16_t lax;  // 2 bytes (Linear Accel X - Extension)
+    int16_t lay;  // 2 bytes (Linear Accel Y)
+    int16_t laz;  // 2 bytes (Linear Accel Z)
     
-    if (request->_tempFile) {
-        request->_tempFile.write(data, len);
-    }
+    int16_t gx;   // 2 bytes (Gravity X - Scaled Float)
+    int16_t gy;   // 2 bytes (Gravity Y)
+    int16_t gz;   // 2 bytes (Gravity Z)
     
-    if (final) {
-        // --- END OF FILE UPLOAD ---
-        Serial.printf("[UPLOAD-EVENT] Finalized: %s\n", filename.c_str());
-        request->_tempFile.close();
-        isUploading = false; 
+    uint8_t btn1; // 1 byte
+    uint8_t btn2; // 1 byte
+} __attribute__((packed)); // Total: 26 bytes
 
+// --- CONFIGURATION ---
+#define AP_SSID  "Akbay"
+#define GYRO_SDA 21 
+#define GYRO_SCL 22
+
+#define BUTTON_1 32
+#define BUTTON_2 33
+
+// --- GLOBALS ---
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+DNSServer dns;
+EspNowHub Hub;
+Gyro gyro(GYRO_SDA, GYRO_SCL); 
+
+// Managers
+DBManager DB;
+SessionManager Session;
+NetworkManager net(&server, &dns, &ws);
+
+// --- STATE TRACKING ---
+// [RESTORED] Mailbox to hold the REAL glove data
+volatile MotionData mailbox;
+// Timestamp to track if the glove is alive
+volatile unsigned long lastGloveTime = 0;
+
+// --- CALLBACK: ESP-NOW PACKET RECEIVED ---
+void onHubReceive(const String& sender, const uint8_t* payload, size_t len) {
+    if (len != sizeof(MotionData)) return;
+    
+    // [UPDATED] Save the real data AND update the timestamp
+    memcpy((void*)&mailbox, payload, sizeof(MotionData));
+    lastGloveTime = millis();
+}
+
+// --- SYSTEM BUSY CALLBACK ---
+void onSystemBusy(bool busy) {
+    if (busy) {
+        Serial.println("[SYSTEM-STATE] Status: BUSY (SD Write)");
+    } else {
+        Serial.println("[SYSTEM-STATE] Status: IDLE");
+    }
+}
+
+// --- WEBSOCKET EVENT HANDLER ---
+void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+        Serial.printf("[WS] Client #%u connected\n", client->id());
     }
 }
 
 void setup() {
     Serial.begin(115200);
     delay(2000); 
-    Serial.println("\n[BOOT-LOG] Brainiac Ball Controller Online.");
 
-    pinMode(Button, INPUT_PULLUP);
+    pinMode(BUTTON_1, INPUT_PULLUP);
+    pinMode(BUTTON_2, INPUT_PULLUP);
+    
+    Serial.println("\n[BOOT] BRAINIAC WROOM-32 HUB ONLINE");
 
-    Serial.print("[HARDWARE-LOG] Gyroscope Initialization...");
+    ws.onEvent(onWsEvent);
+
+    // 1. GYRO INIT (WROOM Pins)
     gyro.setup();
-    Serial.println(" SUCCESS");
 
-    int clk = 39, cmd = 38, d0 = 40;
-    Serial.print("[HARDWARE-LOG] SD Mount...");
-    if(!SD.begin("/sdcard", true)) {
-        Serial.println(" FAILED!");
-    } else {
-        Serial.println(" SUCCESS");
-    }
+    // 2. DATABASE INIT (WROOM SPI Pins)
+    DB.init(); 
 
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ssid);
-    dnsServer.start(53, "*", WiFi.softAPIP());
-    MDNS.begin("ball");
+    // 3. NETWORK INIT
+    net.init(AP_SSID);
+    net.setupRoutes(onSystemBusy); 
+    
+    // 4. ESP-NOW INIT
+    Hub.begin("MainHub"); 
+    Hub.setOnReceive(onHubReceive);
 
-    WebServer.serveStatic("/", SD, "/").setDefaultFile("login.html");
-
-    WebServer.on("/upload", HTTP_DELETE, [](AsyncWebServerRequest *request) {
-        if(request->hasHeader("X-File-Path")) {
-            String path = request->getHeader("X-File-Path")->value();
-            if(!path.startsWith("/")) path = "/" + path;
-            if (SD.exists(path)) {
-                SD.remove(path);
-                Serial.printf("[PRUNE-LOG] Deleted: %s\n", path.c_str());
-                request->send(200, "text/plain", "Deleted");
-            }
-        }
-    });
-
-    WebServer.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request) { request->send(200); }, handleUpload);
-    WebServer.onNotFound([](AsyncWebServerRequest *request){ request->redirect("http://" + WiFi.softAPIP().toString() + "/"); });
-
-    WebServer.addHandler(&WebSocket);
-    WebServer.begin();
-    Serial.println("[SYSTEM-LOG] Deployment and Telemetry services ready.");
+    Serial.println("[SYSTEM] Ready. AP: Brainiac_Host");
 }
 
 void loop() {
-    dnsServer.processNextRequest();
-    WebSocket.cleanupClients();
+    dns.processNextRequest();
+    ws.cleanupClients(); 
 
-    gyro.getData();
-    gyro.readAll();
+    gyro.getData(); 
+    gyro.readAll(); 
 
-    auto& clients = WebSocket.getClients();
-    for (auto& client : clients) {
-        if (client.status() == WS_CONNECTED && client.canSend()) {
-            String json = "{\"x\":" + String(gyro.readX(), 1) + ",\"z\":" + String(gyro.readZ(), 1) + "}";
-            client.text(json);
+    static unsigned long lastSend = 0;
+    if (millis() - lastSend > 50) {
+        lastSend = millis();
+
+        // 1. GET NEW DATA
+        int16_t lax, lay, laz;
+        float gx, gy, gz;
+        
+        gyro.getLinearAccel(lax, lay, laz);
+        gyro.getGravity(gx, gy, gz);
+
+        // 2. ARM DATA
+        String armJson = "{";
+        armJson += "\"device\":\"Arm\","; 
+        armJson += "\"x\":" + String(gyro.readX(), 2) + ",";
+        armJson += "\"y\":" + String(gyro.readY(), 2) + ",";
+        armJson += "\"z\":" + String(gyro.readZ(), 2) + ",";
+        
+        // Linear Accel (Movement)
+        armJson += "\"lax\":" + String(lax) + ",";
+        armJson += "\"lay\":" + String(lay) + ",";
+        armJson += "\"laz\":" + String(laz) + ",";
+        
+        // Gravity (Orientation) - Scaled to Int
+        armJson += "\"gx\":" + String((int)(gx * 1000)) + ",";
+        armJson += "\"gy\":" + String((int)(gy * 1000)) + ",";
+        armJson += "\"gz\":" + String((int)(gz * 1000)) + ",";
+        
+        armJson += "\"b1\":" + String(digitalRead(BUTTON_1) == LOW ? 1 : 0) + ",";
+        armJson += "\"b2\":" + String(digitalRead(BUTTON_2) == LOW ? 1 : 0);
+        armJson += "}";
+        
+        // 3. GLOVE DATA
+        bool isGloveConnected = (millis() - lastGloveTime) < 1500;
+        String gloveJson = "{";
+        gloveJson += "\"device\":\"Glove\","; 
+        
+        if (isGloveConnected) {
+            gloveJson += "\"x\":" + String(mailbox.x, 2) + ",";
+            gloveJson += "\"y\":" + String(mailbox.y, 2) + ",";
+            gloveJson += "\"z\":" + String(mailbox.z, 2) + ",";
+            
+            gloveJson += "\"lax\":" + String(mailbox.lax) + ",";
+            gloveJson += "\"lay\":" + String(mailbox.lay) + ",";
+            gloveJson += "\"laz\":" + String(mailbox.laz) + ",";
+            
+            gloveJson += "\"gx\":" + String(mailbox.gx) + ",";
+            gloveJson += "\"gy\":" + String(mailbox.gy) + ",";
+            gloveJson += "\"gz\":" + String(mailbox.gz) + ",";
+            
+            gloveJson += "\"b1\":" + String(mailbox.btn1) + ",";
+            gloveJson += "\"b2\":1"; 
+        } else {
+            gloveJson += "\"x\":0,\"y\":0,\"z\":0,";
+            gloveJson += "\"lax\":0,\"lay\":0,\"laz\":0,";
+            gloveJson += "\"gx\":0,\"gy\":0,\"gz\":0,";
+            gloveJson += "\"b1\":0,\"b2\":0"; 
+        }
+        gloveJson += "}";
+
+        if (ws.count() > 0) {
+            ws.textAll("[" + armJson + "," + gloveJson + "]");
         }
     }
-    delay(5); 
+    delay(2); 
 }

@@ -13,7 +13,7 @@ import os, json, gzip, hashlib, requests, time, subprocess, sys
 SOURCE_DIR = '../../Websites/Braniac 2'
 HASH_MANIFEST = '.file_hashes.json'
 URL_FILE = 'website_upload_link.txt'
-ESP_SSID = "Ball_Test_AP"
+ESP_SSID = "Akbay"
 HOME_SSID = "WIFI-0"
 HOME_PASS = "password1"
 GZIP_EXTENSIONS = {'.html', '.css', '.js', '.json', '.xml', '.svg', '.txt'}
