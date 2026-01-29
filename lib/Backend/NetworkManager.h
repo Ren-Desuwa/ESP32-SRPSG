@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <functional> 
 #include "DBManager.h"
 
@@ -20,11 +21,23 @@ public:
     }
 
     void init(const char* ssid) {
+        // 1. Start Access Point
         WiFi.mode(WIFI_AP);
         WiFi.softAP(ssid);
         Serial.print("[NET] AP Started: ");
         Serial.println(WiFi.softAPIP());
 
+        // 2. Start mDNS (The "Name Tag" Service)
+        // This allows you to visit: http://akbay.local
+        if (MDNS.begin("akbay")) { 
+            Serial.println("[NET] mDNS Responder Started: http://akbay.local");
+        } else {
+            Serial.println("[NET] Error setting up mDNS!");
+        }
+
+        // 3. Start DNS Server (Captive Portal)
+        // The "*" redirects ALL traffic (google.com, apple.com) to us.
+        // This effectively allows http://akbay.system to work too!
         dns->start(53, "*", WiFi.softAPIP());
     }
 
@@ -110,8 +123,10 @@ public:
         );
 
         // --- 4. 404 & CAPTIVE PORTAL ---
+        // Change this line in NetworkManager.h inside setupRoutes()
         server->onNotFound([this](AsyncWebServerRequest *req){ 
-            req->redirect("http://" + WiFi.softAPIP().toString() + "/"); 
+            // Redirect to the .local address instead of the IP
+            req->redirect("http://akbay.local/"); 
         });
 
         server->addHandler(ws);
