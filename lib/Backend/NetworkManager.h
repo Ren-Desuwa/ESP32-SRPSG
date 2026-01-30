@@ -45,7 +45,7 @@ public:
     void setupRoutes(std::function<void(bool)> onBusyState = nullptr) {
         
         // --- 1. STATIC FILES ---
-        server->serveStatic("/", SD, "/").setDefaultFile("login.html");
+        server->serveStatic("/", SD, "/").setDefaultFile("akbay.html");
 
         // --- 2. DATABASE API (For Website JS) ---
         server->on("/db/read", HTTP_GET, [](AsyncWebServerRequest *req){ 
