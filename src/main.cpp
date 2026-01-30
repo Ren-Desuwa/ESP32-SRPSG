@@ -36,7 +36,8 @@ struct MotionData {
 } __attribute__((packed)); // Total: 26 bytes
 
 // --- CONFIGURATION ---
-#define AP_SSID  "Akbay"
+#define AP_SSID "Akbay"
+#define AP_PASS "czshs2026"
 #define GYRO_SDA 21 
 #define GYRO_SCL 22
 
@@ -86,6 +87,8 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
     }
 }
 
+bool isArmGyroReady = false; // Global or static variable
+
 void setup() {
     Serial.begin(115200);
     delay(2000); 
@@ -96,15 +99,22 @@ void setup() {
     Serial.println("\n[BOOT] BRAINIAC WROOM-32 HUB ONLINE");
 
     ws.onEvent(onWsEvent);
-
-    // 1. GYRO INIT (WROOM Pins)
-    gyro.setup();
-
+    // gyro.setup();
+    do {
+        gyro.setup();
+        if(gyro.dmpReady) {
+            isArmGyroReady = true;
+            Serial.println("[SUCCESS] Arm Gyro Initialized");
+        } else {
+            isArmGyroReady = false;
+            Serial.println("[ERROR] Arm Gyro Failed to Initialize!");
+        }
+    } while (!isArmGyroReady);
     // 2. DATABASE INIT (WROOM SPI Pins)
     DB.init(); 
 
     // 3. NETWORK INIT
-    net.init(AP_SSID);
+    net.init(AP_SSID,AP_PASS);
     net.setupRoutes(onSystemBusy); 
     
     // 4. ESP-NOW INIT
@@ -125,26 +135,33 @@ void loop() {
     if (millis() - lastSend > 50) {
         lastSend = millis();
 
-        // 1. GET NEW DATA
-        int16_t lax, lay, laz;
-        float gx, gy, gz;
-        
-        gyro.getLinearAccel(lax, lay, laz);
-        gyro.getGravity(gx, gy, gz);
+        // 1. PREPARE VARIABLES (Default to 0)
+        int16_t lax = 0, lay = 0, laz = 0;
+        float gx = 0, gy = 0, gz = 0;
+        float rx = 0, ry = 0, rz = 0;
 
-        // 2. ARM DATA
+        // 2. GET NEW DATA (Only if hardware is ready)
+        if (isArmGyroReady) {
+            gyro.getLinearAccel(lax, lay, laz);
+            gyro.getGravity(gx, gy, gz);
+            rx = gyro.readX();
+            ry = gyro.readY();
+            rz = gyro.readZ();
+        }
+
+        // 3. ARM DATA JSON
         String armJson = "{";
         armJson += "\"device\":\"Arm\","; 
-        armJson += "\"x\":" + String(gyro.readX(), 2) + ",";
-        armJson += "\"y\":" + String(gyro.readY(), 2) + ",";
-        armJson += "\"z\":" + String(gyro.readZ(), 2) + ",";
         
-        // Linear Accel (Movement)
+        // These values use the variables above (which are 0 if gyro failed)
+        armJson += "\"x\":" + String(rx, 2) + ",";
+        armJson += "\"y\":" + String(ry, 2) + ",";
+        armJson += "\"z\":" + String(rz, 2) + ",";
+        
         armJson += "\"lax\":" + String(lax) + ",";
         armJson += "\"lay\":" + String(lay) + ",";
         armJson += "\"laz\":" + String(laz) + ",";
         
-        // Gravity (Orientation) - Scaled to Int
         armJson += "\"gx\":" + String((int)(gx * 1000)) + ",";
         armJson += "\"gy\":" + String((int)(gy * 1000)) + ",";
         armJson += "\"gz\":" + String((int)(gz * 1000)) + ",";

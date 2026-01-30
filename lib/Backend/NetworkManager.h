@@ -20,10 +20,10 @@ public:
         ws = w;
     }
 
-    void init(const char* ssid) {
+    void init(const char* ssid, const char* pass) {
         // 1. Start Access Point
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(ssid);
+        WiFi.softAP(ssid,pass);
         Serial.print("[NET] AP Started: ");
         Serial.println(WiFi.softAPIP());
 

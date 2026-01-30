@@ -14,8 +14,8 @@ SOURCE_DIR = '../../Websites/Braniac 2'
 HASH_MANIFEST = '.file_hashes.json'
 URL_FILE = 'website_upload_link.txt'
 ESP_SSID = "Akbay"
-HOME_SSID = "WIFI-0"
-HOME_PASS = "password1"
+HOME_SSID = "RoboticsWifi"
+HOME_PASS = "homeofchampions"
 GZIP_EXTENSIONS = {'.html', '.css', '.js', '.json', '.xml', '.svg', '.txt'}
 
 class Log:
@@ -167,7 +167,7 @@ def main():
             with open(src_path, 'rb') as f:
                 content = gzip.compress(f.read()) if is_gz else f.read()
 
-            r = requests.post(f"{base_url}/upload", files={'file': (target, content)}, headers={'X-File-Path': target}, timeout=15)
+            r = requests.post(f"{base_url}/upload", files={'file': (target, content)}, headers={'X-File-Path': target}, timeout=60)
             if r.status_code == 200:
                 Log.success(f"    Synced {target}")
             else:
